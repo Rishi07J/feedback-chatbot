@@ -1,0 +1,6 @@
+flask
+python-dotenv
+pymongo
+langchain
+langchain_groq
+requests
