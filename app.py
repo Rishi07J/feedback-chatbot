@@ -9,6 +9,16 @@ from mongo_utils import (
     clear_feedback_memory,
     find_upvoted_response,
     find_last_downvoted_comment,
+    get_all_upvoted_responses,
+    find_downvoted_comment_by_prompt,
+)
+from faiss_utils import (
+    search_similar_prompt,
+    build_faiss_index,
+    initialize_faiss,
+    add_to_faiss_index,
+    get_all_prompt_vectors,
+    get_top_similar_prompts,  # NEW helper to get similar prompts from FAISS
 )
 
 # Load environment
@@ -22,20 +32,27 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "your-secret-key")
 # LLM setup
 llm = ChatGroq(api_key=groq_api_key, model_name="llama3-70b-8192")
 
+# Initialize FAISS index
+initialize_faiss()
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+def find_comment_for_similar_prompt(user_prompt: str) -> tuple[str, str] | None:
+    """Find downvoted comment from a prompt that's semantically similar."""
+    similar_prompts = get_top_similar_prompts(user_prompt, top_k=3)
+    for sim_prompt in similar_prompts:
+        comment = find_downvoted_comment_by_prompt(sim_prompt)
+        if comment:
+            return comment, sim_prompt
+    return None
 
 @app.route("/chat", methods=["POST"])
 def chat():
     user_prompt = request.json.get("prompt", "").strip()
-
-    # Retrieve or initialize session memory
     memory = session.get("memory", {})
 
-    # Personalization if user shares name
     if "my name is" in user_prompt.lower():
         name = user_prompt.lower().split("my name is")[-1].strip().split()[0]
         memory["user_name"] = name
@@ -43,23 +60,53 @@ def chat():
 
     memory_info = f"My name is {memory['user_name']}.\n" if "user_name" in memory else ""
 
-    # STEP 1: Try to find a previously upvoted response
+    # STEP 1: Try exact MongoDB upvote match
     cached_response = find_upvoted_response(user_prompt)
     if cached_response:
-        print("✅ Responding from cached upvoted feedback.")
-        memory["last_prompt"] = user_prompt
-        memory["last_response"] = cached_response
-        session["memory"] = memory
-        return jsonify({"response": cached_response})
+        # Check for any downvoted comment from similar prompts
+        result = find_comment_for_similar_prompt(user_prompt)
+        if result:
+            comment, related_prompt = result
+            print("✂️ Applying comment from similar prompt:", comment)
+            prompt_to_model = f"{comment.strip().capitalize()} version of this:\n{cached_response}"
+            response_text = llm.invoke(prompt_to_model).content
+        else:
+            print("✅ MongoDB: Found exact upvoted response")
+            response_text = cached_response
 
-    # STEP 2: Check last downvoted comment (like "give shorter")
+        memory["last_prompt"] = user_prompt
+        memory["last_response"] = response_text
+        session["memory"] = memory
+        return jsonify({"response": response_text})
+
+    # STEP 2: FAISS semantic similarity search
+    faiss_result = search_similar_prompt(user_prompt)
+
+    if faiss_result:
+        # Check for comment related to similar prompt
+        result = find_comment_for_similar_prompt(user_prompt)
+        if result:
+            comment, related_prompt = result
+            print("✂️ Applying comment from similar prompt:", comment)
+            prompt_to_model = f"{comment.strip().capitalize()} version of this:\n{faiss_result}"
+            response_text = llm.invoke(prompt_to_model).content
+        else:
+            print("🔍 FAISS: Found similar response via embedding match")
+            response_text = faiss_result
+
+        memory["last_prompt"] = user_prompt
+        memory["last_response"] = response_text
+        session["memory"] = memory
+        return jsonify({"response": response_text})
+
+    # STEP 3: Check for comment from exact downvote
     comment = find_last_downvoted_comment(user_prompt)
     if comment:
         print("✂️ Using comment to guide new response:", comment)
         prompt_to_model = f"{comment.strip().capitalize()} version of this:\n{memory.get('last_response', '')}"
         response_text = llm.invoke(prompt_to_model).content
     else:
-        # STEP 3: Use few-shot examples to generate fresh response
+        # STEP 4: Few-shot generation
         examples = get_top_feedback_examples()
         example_prompt = PromptTemplate(
             input_variables=["input", "response"],
@@ -75,7 +122,6 @@ def chat():
         final_prompt = few_shot_prompt.format(input=memory_info + user_prompt)
         response_text = llm.invoke(final_prompt).content
 
-    # Update memory
     memory["last_prompt"] = user_prompt
     memory["last_response"] = response_text
     session["memory"] = memory
@@ -86,12 +132,17 @@ def chat():
 @app.route("/feedback", methods=["POST"])
 def feedback():
     data = request.json
-    save_feedback(
-        data["prompt"],
-        data["response"],
-        data["rating"],
-        data.get("comment", "")
-    )
+    prompt = data["prompt"]
+    response = data["response"]
+    rating = data["rating"]
+    comment = data.get("comment", "")
+
+    save_feedback(prompt, response, rating, comment)
+
+    # Only add to FAISS if upvoted
+    if rating == "upvote":
+        add_to_faiss_index(prompt, response)
+
     return jsonify({"message": "Feedback saved!"})
 
 
@@ -104,8 +155,17 @@ def clear_memory():
 
 @app.route("/learned_responses", methods=["GET"])
 def learned_responses():
-    from mongo_utils import get_all_upvoted_responses
     return jsonify({"responses": get_all_upvoted_responses()})
+
+
+@app.route("/vectors", methods=["GET"])
+def view_vectors():
+    vector_data = get_all_prompt_vectors()
+    vector_json = [
+        {"prompt": prompt, "vector": vec.tolist()}
+        for prompt, vec in vector_data
+    ]
+    return jsonify(vector_json)
 
 
 if __name__ == "__main__":

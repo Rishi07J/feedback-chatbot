@@ -44,6 +44,7 @@ def get_top_feedback_examples(limit: int = 5) -> list:
         return []
 
 
+
 def clear_feedback_memory() -> None:
     """Delete all feedback entries from the collection."""
     try:
@@ -107,3 +108,27 @@ def get_all_upvoted_responses() -> list:
     except Exception as e:
         print(f"❌ Error retrieving upvoted responses: {e}")
         return []
+
+
+def get_upvoted_prompt_response_pairs() -> list[tuple[str, str]]:
+    """Return all (prompt, response) pairs from upvoted feedback."""
+    try:
+        docs = collection.find({"rating": "upvote"})
+        return [(doc["prompt"], doc["response"]) for doc in docs if doc.get("prompt") and doc.get("response")]
+    except Exception as e:
+        print(f"❌ Error retrieving prompt-response pairs: {e}")
+        return []
+
+def find_downvoted_comment_by_prompt(prompt: str) -> str | None:
+    """Find comment from downvoted feedback for a given prompt."""
+    try:
+        doc = collection.find_one({
+            "prompt": prompt,
+            "rating": "downvote",
+            "comment": {"$ne": ""}
+        }, sort=[("_id", DESCENDING)])
+        if doc:
+            return doc.get("comment", "")
+    except Exception as e:
+        print(f"❌ Error finding comment: {e}")
+    return None

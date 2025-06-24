@@ -116,7 +116,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // ✅ Core chat handling
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const prompt = promptInput.value.trim();
@@ -138,12 +137,18 @@ document.addEventListener("DOMContentLoaded", () => {
       botDiv.className = "chat-entry bot";
       botDiv.innerHTML = `<strong>Bot:</strong> ${botResponseEscaped}`;
 
-      // ✅ Check if response is from feedback memory
-      if (learnedResponses.has(data.response)) {
-        const tagSpan = document.createElement("span");
-        tagSpan.className = "tag-learned";
-        tagSpan.title = "Learned from feedback";
+      // ✅ Add tag based on response source
+      const source = data.source || "";
+      const tagSpan = document.createElement("span");
+      tagSpan.className = "tag-learned";
+
+      if (source === "mongo") {
+        tagSpan.title = "Learned from exact upvoted feedback";
         tagSpan.textContent = " 📦 Learned from feedback";
+        botDiv.appendChild(tagSpan);
+      } else if (source === "faiss") {
+        tagSpan.title = "Recalled from similar past memory";
+        tagSpan.textContent = " 🧠 Recalled from memory";
         botDiv.appendChild(tagSpan);
       }
 
@@ -159,6 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error(error);
     }
   });
+
 
   clearMemoryBtn.addEventListener("click", async () => {
     if (!confirm("Clear all training memory? This cannot be undone.")) return;
