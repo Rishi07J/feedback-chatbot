@@ -2,7 +2,8 @@
 
 A Flask-based chatbot that continuously improves by learning from user feedback. Built using LangChain, Groq API (LLM), and MongoDB for memory and response optimization.
 
-![image](https://github.com/user-attachments/assets/7ebd0518-6d2d-4ae2-b2aa-d0343f332161)
+<img width="1899" height="914" alt="image" src="https://github.com/user-attachments/assets/222a52b9-0457-4cf0-8fd6-91bc7bb2c218" />
+
 
 
 ---
